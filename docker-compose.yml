@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  # --- Reverse Proxy (Nginx) ---
+  nginx-proxy:
+    image: nginx:alpine
+    container_name: erp-gateway
+    ports:
+      - "80:80"
+      - "443:443" # Required for your self-signed SSL
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro # Note the path change to conf.d
+      - ./certs:/etc/nginx/ssl:ro 
+    networks:
+      - proxy-net
+    restart: always
+
+  # --- iDempiere v12 Application ---
+  app-v12:
+    image: ueg-idempiere:v12-daily
+    container_name: new-v12-app
+    restart: always
+    depends_on:
+      db-v12:
+        condition: service_healthy
+    # Removed public port 8081; traffic should flow via Nginx on 443
+    environment:
+      - TZ=Asia/Muscat
+      - DB_HOST=db-v12  # Changed to match service name
+      - DB_PORT=5432
+      - ZK_SESSION_TIMEOUT=3600
+      - DB_NAME=idempiere
+      - DB_USER=adempiere
+      - DB_PASS=adempiere
+      - DB_ADMIN_PASS=postgres
+      - MIGRATE_EXISTING_DATABASE=true 
+    volumes:
+      - new_v12_config:/opt/idempiere/configuration
+      - new_v12_plugins:/opt/idempiere/plugins
+      - new_v12_log:/opt/idempiere/log
+    networks:
+      - proxy-net
+      - new-erp-net
+
+  # --- iDempiere v12 Database ---
+  db-v12:
+    image: postgres:17
+    container_name: new-v12-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=idempiere
+    volumes:
+      - new_pg_data_v12:/var/lib/postgresql/data
+    networks:
+      - new-erp-net # Only needs the internal net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # --- Database Administration ---
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: new-erp-pgadmin
+    restart: unless-stopped
+    # If you want to access pgAdmin via Nginx, remove these ports and add a location block
+   # ports:
+   #   - "8082:80" 
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@ueg.me
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'True'
+      SCRIPT_NAME: /pgadmin
+    volumes:
+      - ./pgadmin_data:/var/lib/pgadmin  # Change from 'new_pgadmin_data' to this
+    networks:
+      - new-erp-net
+      - proxy-net
+      
+networks:
+  proxy-net:
+  new-erp-net:
+
+volumes:
+  new_pg_data_v12:
+  new_v12_config:
+  new_v12_plugins:
+  new_v12_log:
+  new_pgadmin_data:
